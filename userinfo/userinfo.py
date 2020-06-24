@@ -37,7 +37,7 @@ EMOJIS = {
 class Userinfo(commands.Cog):
     """Replace original Red userinfo command with more details."""
 
-    __version__ = "0.0.3"
+    __version__ = "0.0.4"
 
     def format_help_for_context(self, ctx):
         """Thanks Sinbad."""
@@ -46,17 +46,14 @@ class Userinfo(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
-        self.session = aiohttp.ClientSession()
-        self.headers = {}
-
-    async def initalize(self):
-        token = await self.bot.get_shared_api_tokens("tatsumaki")
-        self.headers = {"authorization": token.get("authorization", None)}
-
-    @commands.Cog.listener()
-    async def on_red_api_tokens_update(self, service_name, api_tokens):
-        if service_name == "tatsumaki":
-            self.headers = {"Authorization": api_tokens.get("authorization", None)}
+        self.status_emojis = {
+            "mobile": discord.utils.get(self.bot.emojis, id=724951240089272413),
+            "online": discord.utils.get(self.bot.emojis, id=724951240089272413),
+            "away": discord.utils.get(self.bot.emojis, id=724951240089272413),
+            "dnd": discord.utils.get(self.bot.emojis, id=724951240089272413),
+            "offline": discord.utils.get(self.bot.emojis, id=724951240089272413),
+            "streaming": discord.utils.get(self.bot.emojis, id=724951240089272413),
+        }
 
     def cog_unload(self):
         # Remove command logic are from: https://github.com/mikeshardmind/SinbadCogs/tree/v3/messagebox
@@ -67,7 +64,15 @@ class Userinfo(commands.Cog):
             except Exception as error:
                 log.info(error)
             self.bot.add_command(_old_userinfo)
-        self.bot.loop.create_task(self.session.close())
+
+    async def initalize(self):
+        token = await self.bot.get_shared_api_tokens("tatsumaki")
+        self.headers = {"authorization": token.get("authorization", None)}
+
+    @commands.Cog.listener()
+    async def on_red_api_tokens_update(self, service_name, api_tokens):
+        if service_name == "tatsumaki":
+            self.headers = {"Authorization": api_tokens.get("authorization", None)}
 
     @commands.command()
     @commands.guild_only()
@@ -105,17 +110,40 @@ class Userinfo(commands.Cog):
 
         created_on = "{}\n({} days ago)".format(user_created, since_created)
         joined_on = "{}\n({} days ago)".format(user_joined, since_joined)
-
-        if any(a.type is discord.ActivityType.streaming for a in user.activities):
-            statusemoji = "\N{LARGE PURPLE CIRCLE}"
+        if user.is_on_mobile():
+            statusemoji = (
+                self.status_emojis["mobile"]
+                if self.status_emojis["mobile"]
+                else "\N{MOBILE PHONE}"
+            )
+        elif any(a.type is discord.ActivityType.streaming for a in user.activities):
+            statusemoji = (
+                self.status_emojis["streaming"]
+                if self.status_emojis["streaming"]
+                else "\N{LARGE PURPLE CIRCLE}"
+            )
         elif user.status.name == "online":
-            statusemoji = "\N{LARGE GREEN CIRCLE}"
+            statusemoji = (
+                self.status_emojis["online"]
+                if self.status_emojis["online"]
+                else "\N{LARGE GREEN CIRCLE}"
+            )
         elif user.status.name == "offline":
-            statusemoji = "\N{MEDIUM WHITE CIRCLE}"
+            statusemoji = (
+                self.status_emojis["offline"]
+                if self.status_emojis["offline"]
+                else "\N{MEDIUM WHITE CIRCLE}"
+            )
         elif user.status.name == "dnd":
-            statusemoji = "\N{LARGE RED CIRCLE}"
+            statusemoji = (
+                self.status_emojis["dnd"] if self.status_emojis["dnd"] else "\N{LARGE RED CIRCLE}"
+            )
         elif user.status.name == "idle":
-            statusemoji = "\N{LARGE ORANGE CIRCLE}"
+            statusemoji = (
+                self.status_emojis["away"]
+                if self.status_emojis["away"]
+                else "\N{LARGE ORANGE CIRCLE}"
+            )
         activity = "Chilling in {} status".format(user.status)
         status_string = mod.get_status_string(user)
 
@@ -186,7 +214,7 @@ class Userinfo(commands.Cog):
         name = filter_invites(name)
 
         avatar = user.avatar_url_as(static_format="png")
-        data.set_author(name=f"{statusemoji} {name}", url=avatar)
+        data.title(name=f"{statusemoji} {name}")
         data.set_thumbnail(url=avatar)
 
         flags = [f.name for f in user.public_flags.all()]
