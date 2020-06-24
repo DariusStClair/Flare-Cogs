@@ -110,7 +110,7 @@ class Userinfo(commands.Cog):
 
         created_on = "{}\n({} days ago)".format(user_created, since_created)
         joined_on = "{}\n({} days ago)".format(user_joined, since_joined)
-        if user.is_on_mobile() and user.mobile_status.name in ["online", "dnd", "idle"]:
+        if user.is_on_mobile():
             statusemoji = (
                 self.status_emojis["mobile"]
                 if self.status_emojis["mobile"]
