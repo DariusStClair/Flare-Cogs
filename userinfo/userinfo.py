@@ -37,7 +37,7 @@ EMOJIS = {
 class Userinfo(commands.Cog):
     """Replace original Red userinfo command with more details."""
 
-    __version__ = "0.0.4"
+    __version__ = "0.0.5"
 
     def format_help_for_context(self, ctx):
         """Thanks Sinbad."""
@@ -54,8 +54,11 @@ class Userinfo(commands.Cog):
             "offline": discord.utils.get(self.bot.emojis, id=724950462746460271),
             "streaming": discord.utils.get(self.bot.emojis, id=724950551900717066),
         }
+        self.session = aiohttp.ClientSession(loop=self.bot.loop)
+        self.headers = {}
 
     def cog_unload(self):
+        self.bot.loop.create_task(self.session.close())
         # Remove command logic are from: https://github.com/mikeshardmind/SinbadCogs/tree/v3/messagebox
         global _old_userinfo
         if _old_userinfo:
@@ -64,15 +67,6 @@ class Userinfo(commands.Cog):
             except Exception as error:
                 log.info(error)
             self.bot.add_command(_old_userinfo)
-
-    async def initalize(self):
-        token = await self.bot.get_shared_api_tokens("tatsumaki")
-        self.headers = {"authorization": token.get("authorization", None)}
-
-    @commands.Cog.listener()
-    async def on_red_api_tokens_update(self, service_name, api_tokens):
-        if service_name == "tatsumaki":
-            self.headers = {"Authorization": api_tokens.get("authorization", None)}
 
     @commands.command()
     @commands.guild_only()
@@ -91,7 +85,6 @@ class Userinfo(commands.Cog):
             guild async for guild in AsyncIter(self.bot.guilds) if user in guild.members
         }
         roles = user.roles[-1:0:-1]
-        names, nicks = await mod.get_names_and_nicks(user)
 
         joined_at = user.joined_at
         since_created = (ctx.message.created_at - user.created_at).days
@@ -107,6 +100,23 @@ class Userinfo(commands.Cog):
             sorted(guild.members, key=lambda m: m.joined_at or ctx.message.created_at).index(user)
             + 1
         )
+
+        flags = [f.name for f in user.public_flags.all()]
+        badges = ""
+        for badge in sorted(flags):
+            if badge == "verified_bot":
+                emoji1 = discord.utils.get(self.bot.emojis, id=EMOJIS["verified_bot"])
+                emoji2 = discord.utils.get(self.bot.emojis, id=EMOJIS["verified_bot2"])
+                if emoji1:
+                    emoji = f"{emoji1}{emoji2}"
+                else:
+                    emoji = None
+            else:
+                emoji = discord.utils.get(self.bot.emojis, id=EMOJIS[badge])
+            if emoji:
+                badges += f"{emoji} {badge.replace('_', ' ').title()}\n"
+            else:
+                badges += f"\N{BLACK QUESTION MARK ORNAMENT}\N{VARIATION SELECTOR-16} {badge.replace('_', ' ').title()}\n"
 
         created_on = "{}\n({} days ago)".format(user_created, since_created)
         joined_on = "{}\n({} days ago)".format(user_joined, since_joined)
@@ -188,19 +198,10 @@ class Userinfo(commands.Cog):
             description=(status_string or activity) + f"\n\n{len(sharedguilds)} shared servers.",
             colour=user.colour,
         )
-
         data.add_field(name="Joined Discord on", value=created_on)
         data.add_field(name="Joined this server on", value=joined_on)
         if role_str is not None:
             data.add_field(name="Roles", value=role_str, inline=False)
-        if names:
-            # May need sanitizing later, but mentions do not ping in embeds currently
-            val = filter_invites(", ".join(names))
-            data.add_field(name="Previous Names", value=val, inline=False)
-        if nicks:
-            # May need sanitizing later, but mentions do not ping in embeds currently
-            val = filter_invites(", ".join(nicks))
-            data.add_field(name="Previous Nicknames", value=val, inline=False)
         if voice_state and voice_state.channel:
             data.add_field(
                 name="Current voice channel",
@@ -216,25 +217,8 @@ class Userinfo(commands.Cog):
         avatar = user.avatar_url_as(static_format="png")
         data.title = f"{statusemoji} {name}"
         data.set_thumbnail(url=avatar)
-
-        flags = [f.name for f in user.public_flags.all()]
-        badges = ""
-        for badge in sorted(flags):
-            if badge == "verified_bot":
-                emoji1 = discord.utils.get(self.bot.emojis, id=EMOJIS["verified_bot"])
-                emoji2 = discord.utils.get(self.bot.emojis, id=EMOJIS["verified_bot2"])
-                if emoji1:
-                    emoji = f"{emoji1}{emoji2}"
-                else:
-                    emoji = None
-            else:
-                emoji = discord.utils.get(self.bot.emojis, id=EMOJIS[badge])
-            if emoji:
-                badges += f"{emoji} {badge.replace('_', ' ').title()}\n"
-            else:
-                badges += f"\N{BLACK QUESTION MARK ORNAMENT}\N{VARIATION SELECTOR-16} {badge.replace('_', ' ').title()}\n"
         if badges:
-            data.add_field(name="Badges", value=badges, inline=False)
+            data.add_field(name="Badges", value=badges, inline=True)
         if ctx.guild:
             if "Leveler" in self.bot.cogs:
                 userinfo = await db.users.find_one({"user_id": str(user.id)})
@@ -245,17 +229,39 @@ class Userinfo(commands.Cog):
                         value=f"**Level**: {udata['level']}\n**XP**: {udata['current_exp']}",
                         inline=True,
                     )
-            if self.headers.get("Authorization", None) is not None:
-                async with self.session.get(
-                    f"https://api.tatsumaki.xyz/users/{user.id}", headers=self.headers
-                ) as r:
-                    if r.status == 200:
-                        resp = await r.json()
-                        data.add_field(
-                            name="Tatsumaki Information",
-                            value=f"**Level**: {resp['level']}\n**XP**: {resp['xp'][0]}/{resp['xp'][1]}\n**Rep**: {resp['reputation']}",
-                            inline=True,
-                        )
+        async with self.session.get(f"https://api.discord.bio/v1/user/details/{user.id}") as r:
+            if r.status == 200:
+                resp = await r.json()
+                msg = ""
+                msg += (
+                    f"**Description**: {resp['payload']['user']['details'].get('description')}\n"
+                    if resp["payload"]["user"]["details"].get("description") is not None
+                    else ""
+                )
+                msg += (
+                    f"**Location**: {resp['payload']['user']['details'].get('location')}\n"
+                    if resp["payload"]["user"]["details"].get("location") is not None
+                    else ""
+                )
+                msg += (
+                    f"**Email**: {resp['payload']['user']['details'].get('email')}\n"
+                    if resp["payload"]["user"]["details"].get("email") is not None
+                    else ""
+                )
+                msg += (
+                    f"**Occupation**: {resp['payload']['user']['details'].get('occupation')}\n"
+                    if resp["payload"]["user"]["details"].get("occupation") is not None
+                    else ""
+                )
+                if msg:
+                    data.add_field(name="Discord Bio Information", value=msg, inline=False)
+                conns = []
+                for connection in resp["payload"]["user"]["discordConnections"]:
+                    conns.append(
+                        f"[{connection['connection_type'].title()} - {connection['name']}]({connection['url']})"
+                    )
+                if conns:
+                    data.add_field(name="Connections", value=" | ".join(conns))
             # if ctx.guild.get_member(159985870458322944) is not None:
             #     async with self.session.get(f"https://mee6.xyz/api/plugins/levels/leaderboard/{ctx.guild.id}?page=0&limit=999") as r:
             #         if r.status == 200:
@@ -279,5 +285,4 @@ async def setup(bot):
     _old_userinfo = bot.get_command("userinfo")
     if _old_userinfo:
         bot.remove_command(_old_userinfo.name)
-    await uinfo.initalize()
     bot.add_cog(uinfo)
