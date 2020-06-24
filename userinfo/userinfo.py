@@ -214,7 +214,7 @@ class Userinfo(commands.Cog):
         name = filter_invites(name)
 
         avatar = user.avatar_url_as(static_format="png")
-        data.title(name=f"{statusemoji} {name}")
+        data.title = f"{statusemoji} {name}"
         data.set_thumbnail(url=avatar)
 
         flags = [f.name for f in user.public_flags.all()]
